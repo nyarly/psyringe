@@ -59,7 +59,17 @@ import (
 )
 
 // Psyringe is a dependency injection container.
-type Psyringe struct {
+type Psyringe interface {
+	Add(constructorsAndValues ...interface{})
+	AddErr(constructorsAndValues ...interface{}) error
+	Inject(targetStructPointers ...interface{}) error
+	MustInject(targetStructPointers ...interface{})
+	Clone() Psyringe
+	Test() error
+	SetDebugFunc(func(...interface{}))
+}
+
+type psy struct {
 	values         map[reflect.Type]reflect.Value
 	ctors          map[reflect.Type]*ctor
 	injectionTypes map[reflect.Type]struct{}
@@ -74,7 +84,7 @@ var (
 // New creates a new Psyringe, and adds the provided constructors and values to
 // it. New will panic if any two arguments have the same injection type. Ssee
 // package level documentation for definition of "injection type".
-func New(constructorsAndValues ...interface{}) *Psyringe {
+func New(constructorsAndValues ...interface{}) Psyringe {
 	p, err := NewErr(constructorsAndValues...)
 	if err != nil {
 		panic(err)
@@ -84,8 +94,8 @@ func New(constructorsAndValues ...interface{}) *Psyringe {
 
 // NewErr is similar to New, but returns an error instead of panicking. This is
 // useful if you are dynamically generating the arguments.
-func NewErr(constructorsAndValues ...interface{}) (*Psyringe, error) {
-	p := &Psyringe{
+func NewErr(constructorsAndValues ...interface{}) (Psyringe, error) {
+	p := &psy{
 		values:         map[reflect.Type]reflect.Value{},
 		ctors:          map[reflect.Type]*ctor{},
 		injectionTypes: map[reflect.Type]struct{}{},
@@ -102,7 +112,7 @@ func NewErr(constructorsAndValues ...interface{}) (*Psyringe, error) {
 // or not. For each constructor, it then generates a generic function in terms
 // of reflect.Values ready to be used by a call to Inject. As such, Add is a
 // relatively expensive call. See Clone for how to avoid calling Add too often.
-func (p *Psyringe) Add(constructorsAndValues ...interface{}) {
+func (p *psy) Add(constructorsAndValues ...interface{}) {
 	if err := p.AddErr(constructorsAndValues...); err != nil {
 		panic(err)
 	}
@@ -110,7 +120,7 @@ func (p *Psyringe) Add(constructorsAndValues ...interface{}) {
 
 // AddErr is similar to Add, but returns an error instead of panicking. This is
 // useful if you are dynamically generating the arguments.
-func (p *Psyringe) AddErr(constructorsAndValues ...interface{}) error {
+func (p *psy) AddErr(constructorsAndValues ...interface{}) error {
 	for i, thing := range constructorsAndValues {
 		if thing == nil {
 			return fmt.Errorf("cannot add nil (argument %d)", i)
@@ -128,7 +138,7 @@ func (p *Psyringe) AddErr(constructorsAndValues ...interface{}) error {
 // values once, and then invoke them multiple times for different instances.
 // This is especially important in long-running applications where the cost of
 // calling Add or New repeatedly may get expensive.
-func (p *Psyringe) Clone() *Psyringe {
+func (p *psy) Clone() Psyringe {
 	q := *p
 	q.ctors = map[reflect.Type]*ctor{}
 	q.values = map[reflect.Type]reflect.Value{}
@@ -147,7 +157,7 @@ func (p *Psyringe) Clone() *Psyringe {
 //
 // If you do not call SetDebugFunc, or if you pass it nil, debug messages will be
 // ignored.
-func (p *Psyringe) SetDebugFunc(f func(...interface{})) {
+func (p *psy) SetDebugFunc(f func(...interface{})) {
 	if f != nil {
 		p.debug = f
 	} else {
@@ -163,7 +173,7 @@ func (p *Psyringe) SetDebugFunc(f func(...interface{})) {
 // passed over, leaving it with whatever value it already had.
 //
 // See package documentation for details on how a Psyringe injects values.
-func (p *Psyringe) Inject(targets ...interface{}) error {
+func (p *psy) Inject(targets ...interface{}) error {
 	wg := sync.WaitGroup{}
 	wg.Add(len(targets))
 	errs := make(chan error)
@@ -185,7 +195,7 @@ func (p *Psyringe) Inject(targets ...interface{}) error {
 }
 
 // MustInject wraps Inject and panics if Inject returns an error.
-func (p *Psyringe) MustInject(targets ...interface{}) {
+func (p *psy) MustInject(targets ...interface{}) {
 	if err := p.Inject(targets...); err != nil {
 		panic(err)
 	}
@@ -194,7 +204,7 @@ func (p *Psyringe) MustInject(targets ...interface{}) {
 // Test checks that all constructors' parameters are satisfied within this
 // Psyringe. This method can be used in your own tests to ensure you have a
 // complete graph.
-func (p *Psyringe) Test() error {
+func (p *psy) Test() error {
 	for _, c := range p.ctors {
 		if err := c.testParametersAreRegisteredIn(p); err != nil {
 			return err
@@ -206,7 +216,7 @@ func (p *Psyringe) Test() error {
 // inject just tries to inject a value for each field in target, no errors if it
 // doesn't know how to inject a value for a given field's type, those fields are
 // just left as-is.
-func (p *Psyringe) inject(target interface{}) error {
+func (p *psy) inject(target interface{}) error {
 	v := reflect.ValueOf(target)
 	ptr := v.Type()
 	if ptr.Kind() != reflect.Ptr {
@@ -241,7 +251,7 @@ func (p *Psyringe) inject(target interface{}) error {
 	return <-errs
 }
 
-func (p *Psyringe) add(thing interface{}) error {
+func (p *psy) add(thing interface{}) error {
 	v := reflect.ValueOf(thing)
 	t := v.Type()
 	var err error
@@ -261,7 +271,7 @@ func (p *Psyringe) add(thing interface{}) error {
 	return err
 }
 
-func (p *Psyringe) getValueForStructField(t reflect.Type) (reflect.Value, bool, error) {
+func (p *psy) getValueForStructField(t reflect.Type) (reflect.Value, bool, error) {
 	if v, ok := p.values[t]; ok {
 		return v, true, nil
 	}
@@ -273,7 +283,7 @@ func (p *Psyringe) getValueForStructField(t reflect.Type) (reflect.Value, bool, 
 	return v, true, err
 }
 
-func (p *Psyringe) getValueForConstructor(forCtor *ctor, paramIndex int, t reflect.Type) (reflect.Value, error) {
+func (p *psy) getValueForConstructor(forCtor *ctor, paramIndex int, t reflect.Type) (reflect.Value, error) {
 	if v, ok := p.values[t]; ok {
 		return v, nil
 	}
@@ -288,17 +298,17 @@ func (p *Psyringe) getValueForConstructor(forCtor *ctor, paramIndex int, t refle
 	return c.getValue(p)
 }
 
-func (p *Psyringe) addCtor(c *ctor) error {
+func (p *psy) addCtor(c *ctor) error {
 	p.ctors[c.outType] = c
 	return p.registerInjectionType(c.outType)
 }
 
-func (p *Psyringe) addValue(t reflect.Type, v reflect.Value) error {
+func (p *psy) addValue(t reflect.Type, v reflect.Value) error {
 	p.values[t] = v
 	return p.registerInjectionType(t)
 }
 
-func (p *Psyringe) registerInjectionType(t reflect.Type) error {
+func (p *psy) registerInjectionType(t reflect.Type) error {
 	if _, alreadyRegistered := p.injectionTypes[t]; alreadyRegistered {
 		return fmt.Errorf("injection type %s already registered", t)
 	}

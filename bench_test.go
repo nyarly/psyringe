@@ -48,7 +48,7 @@ var bestCaseConstructors = []interface{}{
 // calls to New, Clone or Inject.
 // See http://dave.cheney.net/2013/06/30/how-to-write-benchmarks-in-go
 var (
-	P *Psyringe
+	P Psyringe
 	S BenchStruct
 )
 

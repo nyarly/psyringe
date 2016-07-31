@@ -62,7 +62,7 @@ func (c ctor) clone() *ctor {
 	return &c
 }
 
-func (c *ctor) testParametersAreRegisteredIn(s *Psyringe) error {
+func (c *ctor) testParametersAreRegisteredIn(s *psy) error {
 	for paramIndex, paramType := range c.inTypes {
 		if _, constructorExists := s.ctors[paramType]; constructorExists {
 			continue
@@ -79,7 +79,7 @@ func (c *ctor) testParametersAreRegisteredIn(s *Psyringe) error {
 	return nil
 }
 
-func (c *ctor) getValue(s *Psyringe) (reflect.Value, error) {
+func (c *ctor) getValue(s *psy) (reflect.Value, error) {
 	go c.once.Do(func() { c.manifest(s) })
 	if err := <-c.errChan; err != nil {
 		return reflect.Value{}, err
@@ -88,7 +88,7 @@ func (c *ctor) getValue(s *Psyringe) (reflect.Value, error) {
 }
 
 // manifest is called exactly once for each constructor to generate its value.
-func (c *ctor) manifest(s *Psyringe) {
+func (c *ctor) manifest(s *psy) {
 	defer close(c.errChan)
 	wg := sync.WaitGroup{}
 	numArgs := len(c.inTypes)
